@@ -12,7 +12,8 @@ export default function Home() {
 
   useEffect(() => {
     if (session) {
-      fetch("/api/active-rooms")
+      const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "";
+      fetch(`${socketUrl}/api/active-rooms`)
         .then(res => res.json())
         .then(data => setPublicRooms(data.rooms || []))
         .catch(console.error);
@@ -170,7 +171,8 @@ export default function Home() {
           <div className="flex items-center justify-between mb-8">
             <h2 className="text-3xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400">Public Rooms Directory</h2>
             <button onClick={() => {
-              fetch("/api/active-rooms").then(res => res.json()).then(data => setPublicRooms(data.rooms || []));
+              const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "";
+              fetch(`${socketUrl}/api/active-rooms`).then(res => res.json()).then(data => setPublicRooms(data.rooms || []));
             }} className="text-gray-400 hover:text-white transition-colors flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
               Refresh

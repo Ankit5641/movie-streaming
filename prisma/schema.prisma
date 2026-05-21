@@ -1,0 +1,70 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name          String?
+  avatar        String?
+  rooms         Room[]         @relation("RoomHost")
+  sentFriends   Friendship[]   @relation("UserSent")
+  recFriends    Friendship[]   @relation("UserReceived")
+  notifications Notification[]
+  createdAt     DateTime       @default(now())
+}
+
+model Friendship {
+  id        String   @id @default(cuid())
+  senderId  String
+  receiverId String
+  status    String   @default("PENDING") // PENDING, ACCEPTED
+  sender    User     @relation("UserSent", fields: [senderId], references: [id])
+  receiver  User     @relation("UserReceived", fields: [receiverId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([senderId, receiverId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  type      String   // FRIEND_REQUEST, ROOM_INVITE
+  content   String
+  roomId    String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+
+model Room {
+  id        String   @id @default(cuid())
+  name      String
+  hostId    String
+  host      User     @relation("RoomHost", fields: [hostId], references: [id])
+  videoId   String?
+  video     Video?   @relation(fields: [videoId], references: [id])
+  isPrivate Boolean  @default(false)
+  isLocked  Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Video {
+  id        String   @id @default(cuid())
+  title     String
+  url       String   // S3 or local path
+  uploaderId String
+  createdAt DateTime @default(now())
+  rooms     Room[]
+}

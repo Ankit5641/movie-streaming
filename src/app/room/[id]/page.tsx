@@ -1,0 +1,590 @@
+"use client";
+
+import { useSession } from "next-auth/react";
+import { useEffect, useRef, useState, use } from "react";
+import io, { Socket } from "socket.io-client";
+import { useRouter } from "next/navigation";
+import { useWebRTC } from "@/hooks/useWebRTC";
+
+interface Message {
+  id: number;
+  user: string;
+  message?: string;
+  avatar?: string | null;
+}
+
+interface Reaction {
+  id: number;
+  emoji: string;
+  user: string;
+  left: number;
+}
+
+export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id: roomId } = use(params);
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  
+  const videoRef = useRef<HTMLVideoElement>(null);
+  
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [reactions, setReactions] = useState<Reaction[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const videoUrlRef = useRef<string | null>(null);
+  useEffect(() => { videoUrlRef.current = videoUrl; }, [videoUrl]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  
+  const { remoteStreams, isMuted, toggleMute, micError, speakingUsers, isScreenSharing, startScreenShare, stopScreenShare } = useWebRTC(roomId, socket);
+
+  // New States
+  const [isJoined, setIsJoined] = useState(false);
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [passwordInput, setPasswordInput] = useState("");
+  const [joinError, setJoinError] = useState("");
+  const [bufferingUsers, setBufferingUsers] = useState<string[]>([]);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [friendsList, setFriendsList] = useState<any[]>([]);
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  
+  const [isLocked, setIsLocked] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const isHostRef = useRef(false);
+  useEffect(() => { isHostRef.current = isHost; }, [isHost]);
+
+  useEffect(() => {
+    if (status === "unauthenticated") router.push("/login");
+  }, [status, router]);
+
+  const ignorePlay = useRef(false);
+  const ignorePause = useRef(false);
+  const ignoreSeek = useRef(false);
+
+  useEffect(() => {
+    if (!session?.user) return;
+
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || "";
+    const newSocket = socketUrl ? io(socketUrl, { path: "/socket.io/" }) : io({ path: "/socket.io/" });
+    setSocket(newSocket);
+
+    // Initial Join attempt (no password)
+    newSocket.emit("join-room", { roomId, password: "", userName: session.user.name || session.user.email });
+
+    newSocket.on("join-error", (err) => {
+      setNeedsPassword(true);
+      setJoinError(err);
+    });
+
+    newSocket.on("join-success", () => {
+      setIsJoined(true);
+      setNeedsPassword(false);
+    });
+
+    newSocket.on("video-buffering", ({ id, name }) => {
+      setBufferingUsers(prev => prev.includes(name) ? prev : [...prev, name]);
+      if (videoRef.current && !videoRef.current.paused) {
+        ignorePause.current = true;
+        videoRef.current.pause();
+      }
+    });
+
+    newSocket.on("video-ready", ({ id }) => {
+      setBufferingUsers([]);
+      if (videoRef.current && videoRef.current.paused) {
+        ignorePlay.current = true;
+        videoRef.current.play().catch(() => {});
+      }
+    });
+
+    newSocket.on("play", ({ time }) => {
+      if (videoRef.current) {
+        if (Math.abs(videoRef.current.currentTime - time) > 1) {
+          ignoreSeek.current = true;
+          videoRef.current.currentTime = time;
+        }
+        if (videoRef.current.paused) {
+          ignorePlay.current = true;
+          videoRef.current.play().catch(e => console.error("Play error", e));
+        }
+      }
+    });
+
+    newSocket.on("pause", ({ time }) => {
+      if (videoRef.current) {
+        if (Math.abs(videoRef.current.currentTime - time) > 1) {
+          ignoreSeek.current = true;
+          videoRef.current.currentTime = time;
+        }
+        if (!videoRef.current.paused) {
+          ignorePause.current = true;
+          videoRef.current.pause();
+        }
+      }
+    });
+
+    newSocket.on("seek", ({ time }) => {
+      if (videoRef.current) {
+        if (Math.abs(videoRef.current.currentTime - time) > 0.5) {
+          ignoreSeek.current = true;
+          videoRef.current.currentTime = time;
+        }
+      }
+    });
+
+    newSocket.on("sync-video", ({ url }) => {
+      setVideoUrl(url);
+    });
+
+    newSocket.on("lock-room", ({ locked }) => {
+      setIsLocked(locked);
+    });
+
+    newSocket.on("receive-message", (msg: Message) => {
+      setMessages((prev) => [...prev, msg]);
+    });
+
+    newSocket.on("receive-reaction", ({ emoji, user, id }) => {
+      setReactions((prev) => [...prev, { id, emoji, user, left: Math.random() * 80 + 10 }]);
+      setTimeout(() => {
+        setReactions((prev) => prev.filter((r) => r.id !== id));
+      }, 3000);
+    });
+
+    newSocket.on("user-connected", (payload) => {
+      if (videoUrlRef.current) {
+        newSocket.emit("sync-video", { roomId, url: videoUrlRef.current });
+        if (videoRef.current && !videoRef.current.paused) {
+          newSocket.emit("play", { roomId, time: videoRef.current.currentTime });
+        } else if (videoRef.current) {
+          newSocket.emit("pause", { roomId, time: videoRef.current.currentTime });
+        }
+      }
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
+  }, [roomId, session]);
+
+  const handleJoinWithPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (socket) {
+      socket.emit("join-room", { roomId, password: passwordInput, userName: session?.user?.name || session?.user?.email });
+    }
+  };
+
+  const setRoomPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (socket && newPasswordInput) {
+      socket.emit("set-room-password", { roomId, password: newPasswordInput });
+      setShowPasswordModal(false);
+      setIsLocked(true);
+      socket.emit("lock-room", { roomId, locked: true });
+      alert("Room password set and locked.");
+    }
+  };
+
+  const handlePlay = () => {
+    if (ignorePlay.current) { ignorePlay.current = false; return; }
+    if (socket && videoRef.current) {
+      if (!isHost && isLocked) { ignorePause.current = true; videoRef.current.pause(); return; }
+      socket.emit("play", { roomId, time: videoRef.current.currentTime });
+    }
+  };
+
+  const handlePause = () => {
+    if (ignorePause.current) { ignorePause.current = false; return; }
+    if (socket && videoRef.current) {
+      if (!isHost && isLocked) { ignorePlay.current = true; videoRef.current.play().catch(() => {}); return; }
+      socket.emit("pause", { roomId, time: videoRef.current.currentTime });
+    }
+  };
+
+  const handleSeek = () => {
+    if (ignoreSeek.current) { ignoreSeek.current = false; return; }
+    if (socket && videoRef.current) {
+      if (!isHost && isLocked) return;
+      socket.emit("seek", { roomId, time: videoRef.current.currentTime });
+    }
+  };
+
+  const handleWaiting = () => {
+    if (socket) socket.emit("video-buffering", { roomId, userName: session?.user?.name || session?.user?.email });
+  };
+  const handlePlaying = () => {
+    if (socket) socket.emit("video-ready", { roomId });
+  };
+
+  const sendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim() || !socket || !session?.user) return;
+    socket.emit("send-message", { 
+      roomId, 
+      message: chatInput, 
+      user: session.user.name || session.user.email,
+      avatar: session.user.avatar
+    });
+    setChatInput("");
+  };
+
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // Step 1: Get presigned URL
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name, contentType: file.type || "video/mp4" })
+      });
+      const data = await res.json();
+      
+      if (!res.ok) throw new Error(data.error || "Failed to get upload URL");
+
+      const { presignedUrl, publicUrl } = data;
+
+      // Step 2: Upload directly to R2 using XMLHttpRequest for progress
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", presignedUrl, true);
+      xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) setUploadProgress(Math.round((event.loaded / event.total) * 100));
+      };
+
+      xhr.onload = async () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          // Step 3: Save to database
+          const dbRes = await fetch("/api/video", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: file.name, url: publicUrl })
+          });
+          
+          if (dbRes.ok) {
+            setUploading(false);
+            setVideoUrl(publicUrl);
+            if (socket) socket.emit("sync-video", { roomId, url: publicUrl });
+          } else {
+            setUploading(false);
+            alert("Upload succeeded but failed to save to database");
+          }
+        } else {
+          setUploading(false);
+          alert("Cloud upload failed");
+        }
+      };
+
+      xhr.onerror = () => { setUploading(false); alert("Error uploading to cloud"); };
+      xhr.send(file);
+      
+    } catch (error: any) {
+      setUploading(false);
+      alert(error.message);
+    }
+  };
+
+  if (status === "loading" || !session) return <div className="min-h-screen bg-gray-950 flex items-center justify-center text-white">Loading...</div>;
+
+  if (needsPassword && !isJoined) {
+    return (
+      <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center text-white p-4">
+        <div className="bg-gray-900 p-8 rounded-2xl border border-gray-800 max-w-md w-full shadow-2xl">
+          <div className="w-16 h-16 bg-red-600/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6 text-3xl">🔒</div>
+          <h2 className="text-2xl font-bold text-center mb-2">Private Room</h2>
+          <p className="text-gray-400 text-center mb-6">This room is locked. Please enter the PIN.</p>
+          {joinError && <div className="bg-red-500/10 border border-red-500/50 text-red-500 p-3 rounded-lg text-sm mb-4 text-center">{joinError}</div>}
+          <form onSubmit={handleJoinWithPassword} className="space-y-4">
+            <input type="password" placeholder="Room PIN" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} className="w-full bg-black/50 border border-gray-700 rounded-xl px-4 py-3 focus:outline-none focus:border-red-500 text-center text-xl tracking-widest" required />
+            <button type="submit" className="w-full bg-red-600 hover:bg-red-700 font-bold py-3 rounded-xl transition-colors">Unlock</button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // Find if anyone is sharing a screen
+  const screenShareStream = Object.values(remoteStreams).find(stream => stream.getVideoTracks().length > 0);
+
+  return (
+    <>
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes floatUp {
+          0% { transform: translateY(0) scale(1); opacity: 1; }
+          100% { transform: translateY(-50vh) scale(2); opacity: 0; }
+        }
+        .animate-float {
+          animation: floatUp 3s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+        }
+      `}} />
+      <div className="flex flex-col md:flex-row h-[100dvh] bg-gray-950 text-white overflow-hidden relative">
+      {/* Video Section */}
+      <div className="flex-1 flex flex-col relative min-h-[50dvh]">
+        <header className="h-14 md:h-16 flex items-center px-4 md:px-6 bg-gray-900 border-b border-gray-800 shrink-0 z-10">
+          <h1 className="text-lg md:text-xl font-bold truncate max-w-[150px] md:max-w-none">StreamGo: <span className="text-red-500">{roomId}</span></h1>
+          <div className="ml-auto text-xs md:text-sm text-gray-400 flex items-center gap-2 md:gap-4">
+            <button onClick={async () => {
+              setShowInviteModal(true);
+              const res = await fetch("/api/friends");
+              if (res.ok) {
+                const data = await res.json();
+                setFriendsList(data.friends?.filter((f: any) => f.status === "ACCEPTED") || []);
+              }
+            }} className="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 md:px-4 md:py-2 rounded font-semibold text-white border border-gray-700 shadow flex items-center gap-2">
+              <span className="hidden sm:inline">👥 Invite Friends</span>
+              <span className="sm:hidden">👥</span>
+            </button>
+            {isScreenSharing ? (
+              <button onClick={stopScreenShare} className="bg-red-600 hover:bg-red-700 px-3 py-1.5 md:px-4 md:py-2 rounded font-semibold animate-pulse">Stop Sharing</button>
+            ) : (
+              <button onClick={startScreenShare} className="bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 md:px-4 md:py-2 rounded font-semibold hidden md:block shadow-[0_0_10px_rgba(79,70,229,0.5)]">Share Screen</button>
+            )}
+            <span className="hidden md:inline">Invite: {typeof window !== 'undefined' ? window.location.href : ''}</span>
+            <label className={`bg-gray-800 hover:bg-gray-700 px-3 py-1.5 md:px-4 md:py-2 rounded cursor-pointer transition-colors font-semibold ${uploading ? "opacity-75 cursor-not-allowed" : ""}`}>
+              {uploading ? `${uploadProgress}%` : "Upload File"}
+              <input type="file" accept="video/mp4,video/webm" className="hidden" onChange={handleVideoUpload} disabled={uploading} />
+            </label>
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center p-0 md:p-4 bg-black relative min-h-0 overflow-hidden">
+          {/* Floating Reactions Overlay */}
+          <div className="absolute inset-0 pointer-events-none z-40 overflow-hidden">
+            {reactions.map((r) => (
+              <div
+                key={r.id}
+                className="absolute bottom-0 text-4xl animate-float drop-shadow-[0_0_15px_rgba(255,255,255,0.3)] flex flex-col items-center"
+                style={{ left: `${r.left}%` }}
+              >
+                <span>{r.emoji}</span>
+                <span className="text-[10px] font-bold text-white drop-shadow-md mt-1">{r.user.substring(0,10)}</span>
+              </div>
+            ))}
+          </div>
+          {/* Buffering Overlay */}
+          {bufferingUsers.length > 0 && (
+            <div className="absolute inset-0 z-20 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center">
+              <div className="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+              <p className="text-lg font-bold">Waiting for {bufferingUsers.join(", ")} to buffer...</p>
+            </div>
+          )}
+
+          {screenShareStream ? (
+            <div className="w-full h-full relative group">
+              <video
+                autoPlay
+                playsInline
+                muted // Muted to avoid double audio with the hidden elements
+                className="w-full h-full object-contain"
+                ref={(el) => { if (el && el.srcObject !== screenShareStream) el.srcObject = screenShareStream; }}
+              />
+              <div className="absolute top-4 left-4 bg-red-600 text-xs font-bold px-2 py-1 rounded shadow-lg animate-pulse">LIVE SCREEN</div>
+            </div>
+          ) : videoUrl ? (
+            <div className="relative group flex items-center justify-center w-full h-full">
+              <video
+                ref={videoRef}
+                src={videoUrl}
+                className="max-w-full max-h-full rounded-xl shadow-2xl bg-black"
+                controls
+                onPlay={handlePlay}
+                onPause={handlePause}
+                onSeeked={handleSeek}
+                onWaiting={handleWaiting}
+                onPlaying={handlePlaying}
+                onCanPlayThrough={handlePlaying}
+              />
+              {/* Skip Controls overlay */}
+              <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 flex gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => { if (videoRef.current) videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10); }} className="bg-black/60 hover:bg-black/80 px-4 py-2 rounded-full font-medium backdrop-blur">⏪ -10s</button>
+                <button onClick={() => { if (videoRef.current) videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 10); }} className="bg-black/60 hover:bg-black/80 px-4 py-2 rounded-full font-medium backdrop-blur">+10s ⏩</button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center text-gray-500">
+              <svg className="w-24 h-24 mx-auto mb-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <h2 className="text-2xl font-bold text-gray-300">No Media Playing</h2>
+              <p className="mt-2">Upload a video or Share your Screen to start StreamGo!</p>
+            </div>
+          )}
+        </main>
+        
+        {/* Admin Controls */}
+        <div className="h-14 md:h-16 bg-gray-900 border-t border-gray-800 flex items-center justify-between px-4 md:px-6 shrink-0 z-10">
+          <div className="flex items-center gap-4">
+            {!isHost ? (
+              <button onClick={() => setIsHost(true)} className="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded text-sm font-medium">Claim Host</button>
+            ) : (
+              <div className="flex items-center gap-4">
+                <span className="text-red-500 font-bold text-sm">👑 Host</span>
+                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                  <input type="checkbox" checked={isLocked} onChange={(e) => { setIsLocked(e.target.checked); if (socket) socket.emit("lock-room", { roomId, locked: e.target.checked }); }} className="rounded bg-gray-800 text-red-600 focus:ring-red-500"/>
+                  Lock Room
+                </label>
+                <button onClick={() => setShowPasswordModal(true)} className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded border border-gray-700">Set PIN</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Chat & Viewers Section */}
+      <div className="w-full md:w-72 h-[35dvh] md:h-full bg-gray-900 border-t border-gray-800 md:border-t-0 md:border-l flex flex-col shrink-0 relative">
+        <div className="h-14 md:h-16 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 bg-gray-900/95 backdrop-blur z-10">
+          <h2 className="font-semibold text-lg">Live Chat</h2>
+          <div className="flex items-center -space-x-2">
+            {/* Active Speakers Indicator */}
+            {speakingUsers.map((id, i) => (
+              <div key={id} className="w-8 h-8 rounded-full bg-gray-800 border-2 border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] flex items-center justify-center text-xs font-bold z-10 animate-pulse" title="Speaking">
+                🔊
+              </div>
+            ))}
+          </div>
+        </div>
+        
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {messages.map((msg, i) => {
+            const isMe = msg.user === (session.user?.name || session.user?.email);
+            return (
+              <div key={i} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0 overflow-hidden border border-gray-700 flex items-center justify-center text-xs font-bold">
+                  {msg.avatar ? (
+                    <img src={msg.avatar} alt={msg.user} className="w-full h-full object-cover" />
+                  ) : (
+                    msg.user[0].toUpperCase()
+                  )}
+                </div>
+                <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} max-w-[75%]`}>
+                  <span className="text-[10px] text-gray-500 mb-1">{msg.user}</span>
+                  <div className={`p-3 rounded-xl ${isMe ? "bg-red-600 text-white rounded-tr-none" : "bg-gray-800 text-gray-200 rounded-tl-none"}`}>
+                    <p className="text-sm break-words">{msg.message}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="p-4 bg-gray-900 border-t border-gray-800 shrink-0">
+          <div className="flex justify-between mb-3 px-1">
+            {["😂", "😮", "😢", "❤️", "🔥", "👏"].map((emoji) => (
+              <button key={emoji} onClick={() => { 
+                if (!socket || !session?.user) return; 
+                const user = session.user.name || session.user.email;
+                socket.emit("send-reaction", { roomId, emoji, user }); 
+                socket.emit("send-message", { roomId, message: emoji, user, avatar: session.user.avatar });
+              }} className="text-xl hover:scale-125 transition-transform">
+                {emoji}
+              </button>
+            ))}
+          </div>
+          <form onSubmit={sendMessage} className="flex gap-2">
+            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500" />
+            <button type="button" onClick={toggleMute} className={`p-2 rounded-lg transition-colors ${!isMuted ? "bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] animate-pulse" : "bg-gray-800 hover:bg-gray-700"}`}>
+              {isMuted ? "🔇" : "🎤"}
+            </button>
+          </form>
+          {micError && <div className="text-xs text-red-500 text-center mt-2">{micError}</div>}
+        </div>
+        
+        {/* Spatial Audio / Voice Participants */}
+        {Object.keys(remoteStreams).length > 0 && (
+          <div className="p-3 bg-gray-950 border-t border-gray-800 max-h-40 overflow-y-auto shrink-0 shadow-inner">
+            <h3 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+              Voice Participants
+            </h3>
+            <div className="flex flex-col gap-3">
+              {Object.entries(remoteStreams).map(([socketId, stream]) => (
+                <div key={socketId} className="flex items-center gap-2 bg-gray-900 p-2 rounded-lg border border-gray-800">
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${speakingUsers.includes(socketId) ? "bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]" : "bg-gray-800 text-gray-400"}`}>
+                    {socketId.substring(0,2)}
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-xs text-gray-300 font-semibold mb-1 truncate">User {socketId.substring(0,4)}</div>
+                    <input 
+                      type="range" min="0" max="1" step="0.05" defaultValue="1" 
+                      onChange={(e) => {
+                        const audioEl = document.getElementById(`audio-${socketId}`) as HTMLAudioElement;
+                        if (audioEl) audioEl.volume = parseFloat(e.target.value);
+                      }}
+                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500" 
+                    />
+                  </div>
+                  <audio id={`audio-${socketId}`} autoPlay playsInline className="hidden" ref={(el) => { if (el && el.srcObject !== stream) el.srcObject = stream; }} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Set Password Modal */}
+      {showPasswordModal && (
+        <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 max-w-sm w-full">
+            <h3 className="text-xl font-bold mb-4 text-center">Set Room Password</h3>
+            <form onSubmit={setRoomPassword} className="space-y-4">
+              <input type="text" placeholder="Enter PIN (e.g. 1234)" value={newPasswordInput} onChange={(e) => setNewPasswordInput(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded px-4 py-2 focus:border-red-500 text-center" required />
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowPasswordModal(false)} className="flex-1 bg-gray-800 hover:bg-gray-700 py-2 rounded">Cancel</button>
+                <button type="submit" className="flex-1 bg-red-600 hover:bg-red-700 font-bold py-2 rounded">Lock Room</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Set Password Modal */}
+      {/* Invite Friends Modal */}
+      {showInviteModal && (
+        <div className="absolute inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 max-w-sm w-full">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-xl font-bold text-white">Invite Friends</h3>
+              <button onClick={() => setShowInviteModal(false)} className="text-gray-400 hover:text-white">✕</button>
+            </div>
+            
+            {friendsList.length === 0 ? (
+              <p className="text-gray-500 text-center py-4 text-sm">You have no friends on your list yet. Add them in the <a href="/friends" target="_blank" className="text-red-500 hover:underline">Friends tab</a>!</p>
+            ) : (
+              <div className="space-y-3 max-h-60 overflow-y-auto pr-2">
+                {friendsList.map(f => (
+                  <div key={f.id} className="flex items-center justify-between bg-gray-800/50 border border-gray-700 p-2 rounded-lg">
+                    <div className="flex items-center gap-2 truncate">
+                      <div className="w-8 h-8 rounded-full bg-gray-700 overflow-hidden text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {f.friend.avatar ? <img src={f.friend.avatar} alt="Avatar" /> : f.friend.email[0].toUpperCase()}
+                      </div>
+                      <span className="text-sm font-semibold truncate text-gray-200">{f.friend.name || f.friend.email.split("@")[0]}</span>
+                    </div>
+                    <button 
+                      onClick={() => {
+                        if (socket && session?.user) {
+                          socket.emit("send-invite", { targetUserId: f.friend.id, roomId, fromUser: session.user.name || session.user.email });
+                          alert(`Invite sent to ${f.friend.email.split("@")[0]}!`);
+                        }
+                      }}
+                      className="bg-red-600 hover:bg-red-700 text-xs font-bold px-3 py-1.5 rounded transition-colors"
+                    >
+                      Invite
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+    </>
+  );
+}

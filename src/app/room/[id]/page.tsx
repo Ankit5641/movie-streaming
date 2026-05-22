@@ -52,6 +52,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [newPasswordInput, setNewPasswordInput] = useState("");
   
   const [isLocked, setIsLocked] = useState(false);
+  const [playlist, setPlaylist] = useState<{url: string, name: string}[]>([]);
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"chat" | "queue">("chat");
   const [isHost, setIsHost] = useState(false);
   const isHostRef = useRef(false);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
@@ -137,6 +139,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     newSocket.on("sync-video", ({ url }) => {
       setVideoUrl(url);
+    });
+
+    newSocket.on("sync-playlist", ({ playlist }) => {
+      setPlaylist(playlist);
     });
 
     newSocket.on("lock-room", ({ locked }) => {
@@ -232,62 +238,73 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   };
 
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
     setUploading(true);
     setUploadProgress(0);
 
     try {
-      // Step 1: Get presigned URL
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file.name, contentType: file.type || "video/mp4" })
-      });
-      const data = await res.json();
-      
-      if (!res.ok) throw new Error(data.error || "Failed to get upload URL");
+      const newPlaylistItems = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        
+        // Step 1: Get presigned URL
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filename: file.name, contentType: file.type || "video/mp4" })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to get upload URL");
 
-      const { presignedUrl, publicUrl } = data;
+        const { presignedUrl, publicUrl } = data;
 
-      // Step 2: Upload directly to R2 using XMLHttpRequest for progress
-      const xhr = new XMLHttpRequest();
-      xhr.open("PUT", presignedUrl, true);
-      xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
-      
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) setUploadProgress(Math.round((event.loaded / event.total) * 100));
-      };
-
-      xhr.onload = async () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          // Step 3: Save to database
-          const dbRes = await fetch("/api/video", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ title: file.name, url: publicUrl })
-          });
+        // Step 2: Upload directly to R2 using XMLHttpRequest for progress
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("PUT", presignedUrl, true);
+          xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
           
-          if (dbRes.ok) {
-            setUploading(false);
-            setVideoUrl(publicUrl);
-            if (socket) socket.emit("sync-video", { roomId, url: publicUrl });
-          } else {
-            setUploading(false);
-            alert("Upload succeeded but failed to save to database");
-          }
-        } else {
-          setUploading(false);
-          alert("Cloud upload failed");
-        }
-      };
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              const fileProgress = (event.loaded / event.total) * 100;
+              const totalProgress = Math.round(((i * 100) + fileProgress) / files.length);
+              setUploadProgress(totalProgress);
+            }
+          };
 
-      xhr.onerror = () => { setUploading(false); alert("Error uploading to cloud"); };
-      xhr.send(file);
-      
+          xhr.onload = async () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              const dbRes = await fetch("/api/video", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: file.name, url: publicUrl })
+              });
+              if (dbRes.ok) resolve(true);
+              else reject(new Error("Failed to save to db"));
+            } else {
+              reject(new Error("Cloud upload failed"));
+            }
+          };
+          xhr.onerror = () => reject(new Error("Network error during upload"));
+          xhr.send(file);
+        });
+
+        newPlaylistItems.push({ url: publicUrl, name: file.name });
+      }
+
+      setPlaylist(prev => {
+        const updated = [...prev, ...newPlaylistItems];
+        if (socket) socket.emit("sync-playlist", { roomId, playlist: updated });
+        return updated;
+      });
+
     } catch (error: any) {
-      setUploading(false);
       alert(error.message);
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+      e.target.value = '';
     }
   };
 
@@ -348,8 +365,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             )}
             <span className="hidden md:inline">Invite: {typeof window !== 'undefined' ? window.location.href : ''}</span>
             <label className={`bg-gray-800 hover:bg-gray-700 px-3 py-1.5 md:px-4 md:py-2 rounded cursor-pointer transition-colors font-semibold ${uploading ? "opacity-75 cursor-not-allowed" : ""}`}>
-              {uploading ? `${uploadProgress}%` : "Upload File"}
-              <input type="file" accept="video/mp4,video/webm" className="hidden" onChange={handleVideoUpload} disabled={uploading} />
+              {uploading ? `${uploadProgress}%` : "Add Videos"}
+              <input type="file" accept="video/mp4,video/webm" multiple className="hidden" onChange={handleVideoUpload} disabled={uploading} />
             </label>
           </div>
         </header>
@@ -416,6 +433,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               <p className="mt-2">Upload a video or Share your Screen to start StreamGo!</p>
             </div>
           )}
+
+          {/* Custom overlay when not host */}
+          {!isHost && videoUrl && !isScreenSharing && (
+            <div className="absolute inset-0 z-10 opacity-0" onClick={(e) => e.preventDefault()} onDoubleClick={(e) => e.preventDefault()} onContextMenu={(e) => e.preventDefault()} />
+          )}
         </main>
         
         {/* Admin Controls */}
@@ -437,64 +459,127 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         </div>
       </div>
 
-      {/* Chat & Viewers Section */}
+      {/* Sidebar Section */}
       <div className="w-full md:w-72 h-[35dvh] md:h-full bg-gray-900 border-t border-gray-800 md:border-t-0 md:border-l flex flex-col shrink-0 relative">
-        <div className="h-14 md:h-16 border-b border-gray-800 flex items-center justify-between px-4 shrink-0 bg-gray-900/95 backdrop-blur z-10">
-          <h2 className="font-semibold text-lg">Live Chat</h2>
-          <div className="flex items-center -space-x-2">
-            {/* Active Speakers Indicator */}
-            {speakingUsers.map((id, i) => (
-              <div key={id} className="w-8 h-8 rounded-full bg-gray-800 border-2 border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] flex items-center justify-center text-xs font-bold z-10 animate-pulse" title="Speaking">
+        <div className="h-14 md:h-16 border-b border-gray-800 flex items-center justify-between px-2 shrink-0 bg-gray-900/95 backdrop-blur z-10">
+          <div className="flex bg-gray-800 rounded-lg p-1 w-full relative">
+            <button 
+              onClick={() => setActiveSidebarTab("chat")} 
+              className={`flex-1 py-1.5 text-xs font-bold rounded transition-colors ${activeSidebarTab === "chat" ? "bg-gray-600 text-white" : "text-gray-400 hover:text-gray-200"}`}>
+              Live Chat
+            </button>
+            <button 
+              onClick={() => setActiveSidebarTab("queue")} 
+              className={`flex-1 py-1.5 text-xs font-bold rounded transition-colors flex items-center justify-center gap-2 ${activeSidebarTab === "queue" ? "bg-red-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
+              Queue {playlist.length > 0 && <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded-full text-[10px]">{playlist.length}</span>}
+            </button>
+            {/* Active Speakers Indicator absolute positioned */}
+            {speakingUsers.length > 0 && (
+              <div className="absolute right-0 -top-2 w-4 h-4 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] flex items-center justify-center text-[8px] font-bold z-10 animate-pulse text-white">
                 🔊
               </div>
-            ))}
+            )}
           </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.map((msg, i) => {
-            const isMe = msg.user === (session.user?.name || session.user?.email);
-            return (
-              <div key={i} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
-                <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0 overflow-hidden border border-gray-700 flex items-center justify-center text-xs font-bold">
-                  {msg.avatar ? (
-                    <img src={msg.avatar} alt={msg.user} className="w-full h-full object-cover" />
-                  ) : (
-                    msg.user[0].toUpperCase()
-                  )}
-                </div>
-                <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} max-w-[75%]`}>
-                  <span className="text-[10px] text-gray-500 mb-1">{msg.user}</span>
-                  <div className={`p-3 rounded-xl ${isMe ? "bg-red-600 text-white rounded-tr-none" : "bg-gray-800 text-gray-200 rounded-tl-none"}`}>
-                    <p className="text-sm break-words">{msg.message}</p>
+        {activeSidebarTab === "chat" ? (
+          <>
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {messages.map((msg, i) => {
+                const isMe = msg.user === (session.user?.name || session.user?.email);
+                return (
+                  <div key={i} className={`flex gap-2 ${isMe ? "flex-row-reverse" : "flex-row"}`}>
+                    <div className="w-8 h-8 rounded-full bg-gray-800 shrink-0 overflow-hidden border border-gray-700 flex items-center justify-center text-xs font-bold">
+                      {msg.avatar ? (
+                        <img src={msg.avatar} alt={msg.user} className="w-full h-full object-cover" />
+                      ) : (
+                        msg.user[0].toUpperCase()
+                      )}
+                    </div>
+                    <div className={`flex flex-col ${isMe ? "items-end" : "items-start"} max-w-[75%]`}>
+                      <span className="text-[10px] text-gray-500 mb-1">{msg.user}</span>
+                      <div className={`p-3 rounded-xl ${isMe ? "bg-red-600 text-white rounded-tr-none" : "bg-gray-800 text-gray-200 rounded-tl-none"}`}>
+                        <p className="text-sm break-words">{msg.message}</p>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
 
-        <div className="p-4 bg-gray-900 border-t border-gray-800 shrink-0">
-          <div className="flex justify-between mb-3 px-1">
-            {["😂", "😮", "😢", "❤️", "🔥", "👏"].map((emoji) => (
-              <button key={emoji} onClick={() => { 
-                if (!socket || !session?.user) return; 
-                const user = session.user.name || session.user.email;
-                socket.emit("send-reaction", { roomId, emoji, user }); 
-                socket.emit("send-message", { roomId, message: emoji, user, avatar: session.user.avatar });
-              }} className="text-xl hover:scale-125 transition-transform">
-                {emoji}
-              </button>
-            ))}
+            <div className="p-4 bg-gray-900 border-t border-gray-800 shrink-0">
+              <div className="flex justify-between mb-3 px-1">
+                {["😂", "😮", "😢", "❤️", "🔥", "👏"].map((emoji) => (
+                  <button key={emoji} onClick={() => { 
+                    if (!socket || !session?.user) return; 
+                    const user = session.user.name || session.user.email;
+                    socket.emit("send-reaction", { roomId, emoji, user }); 
+                    socket.emit("send-message", { roomId, message: emoji, user, avatar: session.user.avatar });
+                  }} className="text-xl hover:scale-125 transition-transform">
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+              <form onSubmit={sendMessage} className="flex gap-2">
+                <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500" />
+                <button type="button" onClick={toggleMute} className={`p-2 rounded-lg transition-colors ${!isMuted ? "bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] animate-pulse" : "bg-gray-800 hover:bg-gray-700"}`}>
+                  {isMuted ? "🔇" : "🎤"}
+                </button>
+              </form>
+              {micError && <div className="text-xs text-red-500 text-center mt-2">{micError}</div>}
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 overflow-y-auto bg-gray-950 p-2">
+            {playlist.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-gray-500 p-4 text-center">
+                <span className="text-4xl mb-2 opacity-50">📂</span>
+                <p className="text-sm">The Queue is empty.</p>
+                {isHost && <p className="text-xs mt-2 text-gray-600">Click "Add Videos" to add files.</p>}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {playlist.map((item, idx) => {
+                  const isPlaying = item.url === videoUrl;
+                  return (
+                    <div key={idx} className={`group/item flex flex-col p-3 rounded-xl transition-all border ${isPlaying ? 'bg-red-600/10 border-red-500/50' : 'bg-gray-900 border-gray-800 hover:border-gray-700'}`}>
+                      <div className="flex items-center gap-3 w-full">
+                        <div className={`w-6 h-6 flex items-center justify-center rounded-full shrink-0 ${isPlaying ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]' : 'bg-gray-800 text-gray-500 font-bold text-xs'}`}>
+                          {isPlaying ? <span className="animate-pulse">▶</span> : idx + 1}
+                        </div>
+                        <div className="flex-1 overflow-hidden">
+                          <p className={`text-sm truncate font-medium ${isPlaying ? 'text-red-400' : 'text-gray-300'}`} title={item.name}>
+                            {item.name.replace(/\.[^/.]+$/, "")}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {isHost && (
+                        <div className="flex items-center justify-end gap-2 mt-3 pt-2 border-t border-gray-800/50 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                          {!isPlaying && (
+                            <button onClick={() => { 
+                              setVideoUrl(item.url);
+                              if(socket) socket.emit("sync-video", { roomId, url: item.url }); 
+                            }} className="bg-gray-800 hover:bg-gray-700 text-white text-xs px-3 py-1.5 rounded font-medium flex items-center gap-1 transition-colors">
+                              ▶️ Stream
+                            </button>
+                          )}
+                          <button onClick={() => {
+                            const newPlaylist = playlist.filter((_, i) => i !== idx);
+                            setPlaylist(newPlaylist);
+                            if (socket) socket.emit("sync-playlist", { roomId, playlist: newPlaylist });
+                          }} className="bg-gray-800 hover:bg-red-600/20 text-gray-400 hover:text-red-400 text-xs px-3 py-1.5 rounded font-medium flex items-center gap-1 transition-colors">
+                            ✖ Remove
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
-          <form onSubmit={sendMessage} className="flex gap-2">
-            <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} placeholder="Type a message..." className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-red-500" />
-            <button type="button" onClick={toggleMute} className={`p-2 rounded-lg transition-colors ${!isMuted ? "bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.5)] animate-pulse" : "bg-gray-800 hover:bg-gray-700"}`}>
-              {isMuted ? "🔇" : "🎤"}
-            </button>
-          </form>
-          {micError && <div className="text-xs text-red-500 text-center mt-2">{micError}</div>}
-        </div>
+        )}
         
         {/* Spatial Audio / Voice Participants */}
         {Object.keys(remoteStreams).length > 0 && (

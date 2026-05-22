@@ -82,6 +82,11 @@ io.on("connection", (socket) => {
     console.log(`User ${userName} (${socket.id}) joined room ${roomId}`);
     socket.emit("join-success", roomId);
     socket.to(roomId).emit("user-connected", { id: socket.id, name: userName });
+    
+    // Sync current playlist to the new user if it exists
+    if (room && room.playlist) {
+      socket.emit("sync-playlist", { playlist: room.playlist });
+    }
   });
 
   socket.on("disconnecting", () => {
@@ -108,11 +113,19 @@ io.on("connection", (socket) => {
   socket.on("sync-time", ({ roomId, time }) => socket.to(roomId).emit("sync-time", { time }));
 
   socket.on("sync-video", ({ roomId, url }) => {
-    if (!roomsData.has(roomId)) roomsData.set(roomId, { locked: false });
+    if (!roomsData.has(roomId)) roomsData.set(roomId, { locked: false, playlist: [] });
     const room = roomsData.get(roomId);
     room.hasVideo = !!url;
     roomsData.set(roomId, room);
     socket.to(roomId).emit("sync-video", { url });
+  });
+
+  socket.on("sync-playlist", ({ roomId, playlist }) => {
+    if (!roomsData.has(roomId)) roomsData.set(roomId, { locked: false, playlist: [] });
+    const room = roomsData.get(roomId);
+    room.playlist = playlist;
+    roomsData.set(roomId, room);
+    socket.to(roomId).emit("sync-playlist", { playlist });
   });
 
   socket.on("lock-room", ({ roomId, locked }) => socket.to(roomId).emit("lock-room", { locked }));

@@ -132,6 +132,16 @@ app.prepare().then(() => {
       socket.to(roomId).emit("sync-video", { url });
     });
 
+    socket.on("sync-playlist", ({ roomId, playlist }) => {
+      if (!roomsData.has(roomId)) {
+        roomsData.set(roomId, { locked: false, playlist: [] });
+      }
+      const room = roomsData.get(roomId);
+      room.playlist = playlist;
+      roomsData.set(roomId, room);
+      socket.to(roomId).emit("sync-playlist", { playlist });
+    });
+
     // Phase 5: Admin Controls
     socket.on("lock-room", ({ roomId, locked }) => {
       socket.to(roomId).emit("lock-room", { locked });
@@ -184,6 +194,24 @@ app.prepare().then(() => {
       io.to(target).emit("webrtc-ice-candidate", { candidate, sender });
     });
   });
+
+  // Clean up inactive rooms every hour
+  setInterval(() => {
+    const now = Date.now();
+    const SIX_HOURS = 6 * 60 * 60 * 1000;
+    for (const [roomId, data] of roomsData.entries()) {
+      const clients = io.sockets.adapter.rooms.get(roomId);
+      if (clients && clients.size > 0) {
+        data.lastActivity = now; // Room is active
+      } else {
+        if (!data.lastActivity) data.lastActivity = now;
+        if (now - data.lastActivity > SIX_HOURS) {
+          roomsData.delete(roomId);
+          console.log(`Deleted inactive room: ${roomId}`);
+        }
+      }
+    }
+  }, 60 * 60 * 1000);
 
   server
     .once("error", (err) => {

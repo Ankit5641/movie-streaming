@@ -366,7 +366,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             <span className="hidden md:inline">Invite: {typeof window !== 'undefined' ? window.location.href : ''}</span>
             <label className={`bg-gray-800 hover:bg-gray-700 px-3 py-1.5 md:px-4 md:py-2 rounded cursor-pointer transition-colors font-semibold ${uploading ? "opacity-75 cursor-not-allowed" : ""}`}>
               {uploading ? `${uploadProgress}%` : "Add Videos"}
-              <input type="file" accept="video/mp4,video/webm" multiple className="hidden" onChange={handleVideoUpload} disabled={uploading} />
+              <input type="file" accept="video/*" multiple className="hidden" onChange={handleVideoUpload} disabled={uploading} />
             </label>
           </div>
         </header>

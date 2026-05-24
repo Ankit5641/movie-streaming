@@ -217,6 +217,17 @@ export default function Home() {
           )}
         </div>
       </main>
+
+      {/* Footer */}
+      <footer className="w-full border-t border-gray-800/50 bg-gray-950/80 backdrop-blur-xl mt-auto z-10 py-8 relative">
+        <div className="absolute inset-0 bg-gradient-to-r from-red-600/5 via-transparent to-red-600/5 pointer-events-none"></div>
+        <div className="max-w-7xl mx-auto px-4 text-center flex flex-col items-center justify-center">
+          <div className="w-12 h-1 bg-gradient-to-r from-red-600 to-red-900 rounded-full mb-4"></div>
+          <p className="text-sm md:text-base font-medium tracking-widest text-gray-400 uppercase flex items-center gap-2">
+            All rights belong to <span className="text-red-500 font-extrabold hover:text-red-400 transition-colors drop-shadow-[0_0_12px_rgba(239,68,68,0.6)] cursor-pointer">@rukku</span>
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

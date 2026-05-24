@@ -5,6 +5,7 @@ const { Server } = require("socket.io");
 const port = process.env.PORT || 3000;
 const roomsData = new Map();
 const globalUsers = new Map(); // userId -> socket.id
+const socketToUser = new Map(); // socket.id -> userName
 
 const server = createServer((req, res) => {
   try {
@@ -79,8 +80,13 @@ io.on("connection", (socket) => {
     }
 
     socket.join(roomId);
+    socketToUser.set(socket.id, userName);
     console.log(`User ${userName} (${socket.id}) joined room ${roomId}`);
-    socket.emit("join-success", roomId);
+    
+    const clients = io.sockets.adapter.rooms.get(roomId);
+    const participants = clients ? Array.from(clients).map(id => ({ id, name: socketToUser.get(id) || "Guest" })) : [];
+    
+    socket.emit("join-success", { roomId, participants });
     socket.to(roomId).emit("user-connected", { id: socket.id, name: userName });
     
     // Sync current playlist to the new user if it exists
@@ -99,6 +105,7 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
+    socketToUser.delete(socket.id);
     for (const [userId, sId] of globalUsers.entries()) {
       if (sId === socket.id) {
         globalUsers.delete(userId);
@@ -134,6 +141,14 @@ io.on("connection", (socket) => {
     if (!roomsData.has(roomId)) roomsData.set(roomId, { password });
     else roomsData.get(roomId).password = password;
     socket.emit("password-set", true);
+  });
+
+  socket.on("kick-user", ({ roomId, targetId }) => {
+    io.to(targetId).emit("kicked");
+    const targetSocket = io.sockets.sockets.get(targetId);
+    if (targetSocket) {
+      targetSocket.leave(roomId);
+    }
   });
 
   socket.on("video-buffering", ({ roomId, userName }) => socket.to(roomId).emit("video-buffering", { id: socket.id, name: userName }));

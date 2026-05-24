@@ -57,6 +57,7 @@ app.prepare().then(() => {
 
   const roomsData = new Map();
   const globalUsers = new Map(); // userId -> socket.id
+  const socketToUser = new Map(); // socket.id -> userName
 
   io.on("connection", (socket) => {
     console.log("A user connected:", socket.id);
@@ -80,8 +81,13 @@ app.prepare().then(() => {
       }
       
       socket.join(roomId);
+      socketToUser.set(socket.id, userName);
       console.log(`User ${userName} (${socket.id}) joined room ${roomId}`);
-      socket.emit("join-success", roomId);
+      
+      const clients = io.sockets.adapter.rooms.get(roomId);
+      const participants = clients ? Array.from(clients).map(id => ({ id, name: socketToUser.get(id) || "Guest" })) : [];
+      
+      socket.emit("join-success", { roomId, participants });
       // Notify others in room
       socket.to(roomId).emit("user-connected", { id: socket.id, name: userName });
     });
@@ -97,6 +103,7 @@ app.prepare().then(() => {
 
     socket.on("disconnect", () => {
       console.log("User disconnected:", socket.id);
+      socketToUser.delete(socket.id);
       for (const [userId, sId] of globalUsers.entries()) {
         if (sId === socket.id) {
           globalUsers.delete(userId);
@@ -154,6 +161,14 @@ app.prepare().then(() => {
         roomsData.get(roomId).password = password;
       }
       socket.emit("password-set", true);
+    });
+
+    socket.on("kick-user", ({ roomId, targetId }) => {
+      io.to(targetId).emit("kicked");
+      const targetSocket = io.sockets.sockets.get(targetId);
+      if (targetSocket) {
+        targetSocket.leave(roomId);
+      }
     });
 
     socket.on("video-buffering", ({ roomId, userName }) => {

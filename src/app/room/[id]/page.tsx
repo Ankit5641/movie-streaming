@@ -53,6 +53,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   
   const [isLocked, setIsLocked] = useState(false);
   const [playlist, setPlaylist] = useState<{url: string, name: string}[]>([]);
+  const [participants, setParticipants] = useState<{id: string, name: string}[]>([]);
   const [activeSidebarTab, setActiveSidebarTab] = useState<"chat" | "queue">("chat");
   const [isHost, setIsHost] = useState(false);
   const isHostRef = useRef(false);
@@ -81,9 +82,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       setJoinError(err);
     });
 
-    newSocket.on("join-success", () => {
+    newSocket.on("join-success", (data) => {
       setIsJoined(true);
       setNeedsPassword(false);
+      if (data && data.participants) {
+        setParticipants(data.participants);
+      }
     });
 
     newSocket.on("video-buffering", ({ id, name }) => {
@@ -161,6 +165,12 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     });
 
     newSocket.on("user-connected", (payload) => {
+      setParticipants(prev => {
+        if (!prev.find(p => p.id === payload.id)) {
+          return [...prev, { id: payload.id, name: payload.name || "Guest" }];
+        }
+        return prev;
+      });
       if (videoUrlRef.current) {
         newSocket.emit("sync-video", { roomId, url: videoUrlRef.current });
         if (videoRef.current && !videoRef.current.paused) {
@@ -171,6 +181,15 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       }
     });
 
+    newSocket.on("user-disconnected", (id) => {
+      setParticipants(prev => prev.filter(p => p.id !== id));
+    });
+
+    newSocket.on("kicked", () => {
+      alert("You have been removed by the host.");
+      router.push("/");
+    });
+    
     return () => {
       newSocket.disconnect();
     };
@@ -582,32 +601,50 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         )}
         
         {/* Spatial Audio / Voice Participants */}
-        {Object.keys(remoteStreams).length > 0 && (
+        {participants.length > 0 && (
           <div className="p-3 bg-gray-950 border-t border-gray-800 max-h-40 overflow-y-auto shrink-0 shadow-inner">
             <h3 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-3 flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
               Voice Participants
             </h3>
             <div className="flex flex-col gap-3">
-              {Object.entries(remoteStreams).map(([socketId, stream]) => (
-                <div key={socketId} className="flex items-center gap-2 bg-gray-900 p-2 rounded-lg border border-gray-800">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${speakingUsers.includes(socketId) ? "bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]" : "bg-gray-800 text-gray-400"}`}>
-                    {socketId.substring(0,2)}
+              {participants.map((p) => {
+                const isMe = socket ? p.id === socket.id : false;
+                const stream = remoteStreams[p.id];
+
+                return (
+                  <div key={p.id} className="flex items-center gap-2 bg-gray-900 p-2 rounded-lg border border-gray-800">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${speakingUsers.includes(p.id) ? "bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]" : "bg-gray-800 text-gray-400"}`}>
+                      {p.name.substring(0,2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <div className="text-xs text-gray-300 font-semibold mb-1 truncate">
+                        {p.name} {isMe && <span className="text-gray-500">(You)</span>}
+                      </div>
+                      {!isMe && (
+                        <input 
+                          type="range" min="0" max="1" step="0.05" defaultValue="1" 
+                          onChange={(e) => {
+                            const audioEl = document.getElementById(`audio-${p.id}`) as HTMLAudioElement;
+                            if (audioEl) audioEl.volume = parseFloat(e.target.value);
+                          }}
+                          className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500" 
+                        />
+                      )}
+                    </div>
+                    {isHost && !isMe && (
+                      <button 
+                        onClick={() => socket?.emit("kick-user", { roomId, targetId: p.id })}
+                        title="Kick User"
+                        className="ml-2 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white px-2 py-1 rounded text-[10px] font-bold transition-colors uppercase tracking-wide border border-red-500/30"
+                      >
+                        Kick
+                      </button>
+                    )}
+                    {!isMe && stream && <audio id={`audio-${p.id}`} autoPlay playsInline className="hidden" ref={(el) => { if (el && el.srcObject !== stream) el.srcObject = stream; }} />}
                   </div>
-                  <div className="flex-1">
-                    <div className="text-xs text-gray-300 font-semibold mb-1 truncate">User {socketId.substring(0,4)}</div>
-                    <input 
-                      type="range" min="0" max="1" step="0.05" defaultValue="1" 
-                      onChange={(e) => {
-                        const audioEl = document.getElementById(`audio-${socketId}`) as HTMLAudioElement;
-                        if (audioEl) audioEl.volume = parseFloat(e.target.value);
-                      }}
-                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500" 
-                    />
-                  </div>
-                  <audio id={`audio-${socketId}`} autoPlay playsInline className="hidden" ref={(el) => { if (el && el.srcObject !== stream) el.srcObject = stream; }} />
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}

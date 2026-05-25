@@ -113,13 +113,7 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
   useEffect(() => {
     const initMic = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getAudioTracks().forEach(track => { track.enabled = false; }); // Muted by default
         streamRef.current = stream;
         setLocalStream(stream);

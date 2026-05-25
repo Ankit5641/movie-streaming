@@ -28,6 +28,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const videoRef = useRef<HTMLVideoElement>(null);
   
   const [messages, setMessages] = useState<Message[]>([]);
+  const [latestMobileMessage, setLatestMobileMessage] = useState<Message | null>(null);
   const [reactions, setReactions] = useState<Reaction[]>([]);
   const [chatInput, setChatInput] = useState("");
   
@@ -155,6 +156,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     newSocket.on("receive-message", (msg: Message) => {
       setMessages((prev) => [...prev, msg]);
+      setLatestMobileMessage(msg);
+      setTimeout(() => {
+        setLatestMobileMessage((current) => current?.id === msg.id ? null : current);
+      }, 4000);
     });
 
     newSocket.on("receive-reaction", ({ emoji, user, id }) => {
@@ -359,6 +364,15 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         .animate-float {
           animation: floatUp 3s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
         }
+        @keyframes floatMessage {
+          0% { transform: translateY(20px); opacity: 0; }
+          10% { transform: translateY(0); opacity: 1; }
+          90% { transform: translateY(0); opacity: 1; }
+          100% { transform: translateY(-20px); opacity: 0; }
+        }
+        .animate-float-message {
+          animation: floatMessage 4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+        }
       `}} />
       <div className="flex flex-col md:flex-row h-[100dvh] bg-gray-950 text-white overflow-hidden relative">
       {/* Video Section */}
@@ -457,30 +471,56 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           {!isHost && videoUrl && !isScreenSharing && (
             <div className="absolute inset-0 z-10 opacity-0" onClick={(e) => e.preventDefault()} onDoubleClick={(e) => e.preventDefault()} onContextMenu={(e) => e.preventDefault()} />
           )}
-        </main>
-        
-        {/* Admin Controls */}
-        <div className="h-14 md:h-16 bg-gray-900 border-t border-gray-800 flex items-center justify-between px-4 md:px-6 shrink-0 z-10">
-          <div className="flex items-center gap-4">
-            {!isHost ? (
-              <button onClick={() => setIsHost(true)} className="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded text-sm font-medium">Claim Host</button>
-            ) : (
-              <div className="flex items-center gap-4">
-                <span className="text-red-500 font-bold text-sm">👑 Host</span>
-                <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
-                  <input type="checkbox" checked={isLocked} onChange={(e) => { setIsLocked(e.target.checked); if (socket) socket.emit("lock-room", { roomId, locked: e.target.checked }); }} className="rounded bg-gray-800 text-red-600 focus:ring-red-500"/>
-                  Lock Room
-                </label>
-                <button onClick={() => setShowPasswordModal(true)} className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded border border-gray-700">Set PIN</button>
+
+          {/* Floating Mobile Chat Toast */}
+          <div className="md:hidden absolute bottom-16 left-4 right-4 z-20 pointer-events-none flex flex-col items-center">
+            {latestMobileMessage && (
+              <div key={latestMobileMessage.id} className="animate-float-message bg-black/60 backdrop-blur-md text-white px-4 py-2 rounded-xl inline-block max-w-full shadow-lg border border-white/10">
+                <span className="font-bold text-red-400 mr-2">{latestMobileMessage.user}:</span>
+                <span className="text-sm truncate block sm:inline">{latestMobileMessage.message}</span>
               </div>
             )}
+          </div>
+        </main>
+        
+        {/* Admin Controls & Mobile Tabs */}
+        <div className="h-14 md:h-16 bg-gray-900 border-t border-gray-800 flex flex-wrap md:flex-nowrap items-center justify-between px-2 md:px-6 shrink-0 z-10 gap-2">
+          <div className="flex items-center gap-2 md:gap-4 overflow-x-auto no-scrollbar flex-shrink-0">
+            {!isHost ? (
+              <button onClick={() => setIsHost(true)} className="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 md:px-4 md:py-2 rounded text-xs md:text-sm font-medium whitespace-nowrap">Claim Host</button>
+            ) : (
+              <div className="flex items-center gap-2 md:gap-4 whitespace-nowrap">
+                <span className="text-red-500 font-bold text-xs md:text-sm">👑 Host</span>
+                <label className="flex items-center gap-1 md:gap-2 text-xs md:text-sm text-gray-300 cursor-pointer">
+                  <input type="checkbox" checked={isLocked} onChange={(e) => { setIsLocked(e.target.checked); if (socket) socket.emit("lock-room", { roomId, locked: e.target.checked }); }} className="rounded bg-gray-800 text-red-600 focus:ring-red-500"/>
+                  <span className="hidden sm:inline">Lock Room</span>
+                  <span className="sm:hidden">Lock</span>
+                </label>
+                <button onClick={() => setShowPasswordModal(true)} className="text-[10px] md:text-xs bg-gray-800 hover:bg-gray-700 px-2 md:px-3 py-1 md:py-1.5 rounded border border-gray-700">Set PIN</button>
+              </div>
+            )}
+          </div>
+
+          {/* Mobile Tabs */}
+          <div className="flex md:hidden bg-gray-800 rounded-lg p-1 max-w-[200px] w-full ml-auto">
+            <button 
+              onClick={() => setActiveSidebarTab("chat")} 
+              className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-colors ${activeSidebarTab === "chat" ? "bg-gray-600 text-white" : "text-gray-400 hover:text-gray-200"}`}>
+              Chat
+            </button>
+            <button 
+              onClick={() => setActiveSidebarTab("queue")} 
+              className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-colors flex items-center justify-center gap-1 ${activeSidebarTab === "queue" ? "bg-red-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
+              Queue {playlist.length > 0 && <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded-full text-[8px]">{playlist.length}</span>}
+            </button>
           </div>
         </div>
       </div>
 
       {/* Sidebar Section */}
       <div className="w-full md:w-72 h-[35dvh] md:h-full bg-gray-900 border-t border-gray-800 md:border-t-0 md:border-l flex flex-col shrink-0 relative">
-        <div className="h-14 md:h-16 border-b border-gray-800 flex items-center justify-between px-2 shrink-0 bg-gray-900/95 backdrop-blur z-10">
+        {/* Desktop Tabs (Hidden on mobile) */}
+        <div className="hidden md:flex h-14 md:h-16 border-b border-gray-800 items-center justify-between px-2 shrink-0 bg-gray-900/95 backdrop-blur z-10">
           <div className="flex bg-gray-800 rounded-lg p-1 w-full relative">
             <button 
               onClick={() => setActiveSidebarTab("chat")} 

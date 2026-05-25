@@ -379,7 +379,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       {/* Video Section */}
       <div className="flex-1 flex flex-col relative min-h-[50dvh]">
         <header className="h-14 md:h-16 flex items-center px-4 md:px-6 bg-gray-900 border-b border-gray-800 shrink-0 z-10">
-          <h1 className="text-lg md:text-xl font-bold truncate max-w-[150px] md:max-w-none">StreamGo: <span className="text-red-500">{roomId}</span></h1>
+          <h1 className="text-lg md:text-xl font-bold shrink-0 mr-2">
+            <span className="hidden sm:inline">StreamGo: </span>
+            <span className="text-red-500">{roomId}</span>
+          </h1>
           <div className="ml-auto text-xs md:text-sm text-gray-400 flex items-center gap-2 md:gap-4">
             <button onClick={async () => {
               setShowInviteModal(true);

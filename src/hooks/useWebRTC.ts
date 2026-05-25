@@ -113,7 +113,13 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
   useEffect(() => {
     const initMic = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
         stream.getAudioTracks().forEach(track => { track.enabled = false; }); // Muted by default
         streamRef.current = stream;
         setLocalStream(stream);
@@ -134,6 +140,32 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
     };
   }, []);
 
+  // Handle Late Microphone Initialization (Race Condition Fix)
+  useEffect(() => {
+    if (localStream && socket) {
+      Object.entries(peers.current).forEach(([targetSocketId, peer]) => {
+        const senders = peer.getSenders();
+        localStream.getAudioTracks().forEach(track => {
+          const alreadyAdded = senders.find(s => s.track === track);
+          if (!alreadyAdded) {
+            peer.addTrack(track, localStream);
+            // Trigger renegotiation
+            peer.createOffer()
+              .then(offer => peer.setLocalDescription(offer))
+              .then(() => {
+                socket.emit("webrtc-offer", {
+                  target: targetSocketId,
+                  caller: socket.id,
+                  sdp: peer.localDescription,
+                });
+              })
+              .catch(err => console.error("Renegotiation failed:", err));
+          }
+        });
+      });
+    }
+  }, [localStream, socket]);
+
   // WebRTC Signaling Logic
   useEffect(() => {
     if (!socket) return;
@@ -152,7 +184,10 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
     };
 
     const handleReceiveOffer = async ({ caller, sdp }: { caller: string, sdp: RTCSessionDescriptionInit }) => {
-      const peer = createPeer(caller);
+      let peer = peers.current[caller];
+      if (!peer) {
+        peer = createPeer(caller);
+      }
       await peer.setRemoteDescription(new RTCSessionDescription(sdp));
       
       const answer = await peer.createAnswer();

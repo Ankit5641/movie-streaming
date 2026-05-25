@@ -12,6 +12,7 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
 
   const peers = useRef<Record<string, RTCPeerConnection>>({});
+  const pendingCandidates = useRef<Record<string, RTCIceCandidateInit[]>>({});
   const streamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
 
@@ -182,29 +183,57 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
       if (!peer) {
         peer = createPeer(caller);
       }
-      await peer.setRemoteDescription(new RTCSessionDescription(sdp));
       
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
+      try {
+        await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+        
+        // Flush pending candidates
+        if (pendingCandidates.current[caller]) {
+          for (const candidate of pendingCandidates.current[caller]) {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+          }
+          delete pendingCandidates.current[caller];
+        }
 
-      socket.emit("webrtc-answer", {
-        target: caller,
-        caller: socket.id,
-        sdp: peer.localDescription,
-      });
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+
+        socket.emit("webrtc-answer", {
+          target: caller,
+          caller: socket.id,
+          sdp: peer.localDescription,
+        });
+      } catch (err) {
+        console.error("Error handling offer:", err);
+      }
     };
 
     const handleReceiveAnswer = async ({ caller, sdp }: { caller: string, sdp: RTCSessionDescriptionInit }) => {
       const peer = peers.current[caller];
       if (peer) {
-        await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+        try {
+          await peer.setRemoteDescription(new RTCSessionDescription(sdp));
+          
+          // Flush pending candidates
+          if (pendingCandidates.current[caller]) {
+            for (const candidate of pendingCandidates.current[caller]) {
+              await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+            }
+            delete pendingCandidates.current[caller];
+          }
+        } catch (err) {
+          console.error("Error handling answer:", err);
+        }
       }
     };
 
     const handleNewICECandidate = async ({ sender, candidate }: { sender: string, candidate: RTCIceCandidateInit }) => {
       const peer = peers.current[sender];
-      if (peer) {
-        await peer.addIceCandidate(new RTCIceCandidate(candidate));
+      if (peer && peer.remoteDescription) {
+        await peer.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+      } else {
+        if (!pendingCandidates.current[sender]) pendingCandidates.current[sender] = [];
+        pendingCandidates.current[sender].push(candidate);
       }
     };
 
@@ -213,6 +242,7 @@ export function useWebRTC(roomId: string, socket: Socket | null) {
         peers.current[disconnectedSocketId].close();
         delete peers.current[disconnectedSocketId];
       }
+      delete pendingCandidates.current[disconnectedSocketId];
       setRemoteStreams((prev) => {
         const newStreams = { ...prev };
         delete newStreams[disconnectedSocketId];

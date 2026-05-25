@@ -28,7 +28,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const videoRef = useRef<HTMLVideoElement>(null);
   
   const [messages, setMessages] = useState<Message[]>([]);
-  const [latestMobileMessage, setLatestMobileMessage] = useState<Message | null>(null);
+  const [floatingMessages, setFloatingMessages] = useState<(Message & { floatId: number, left: number })[]>([]);
   const [reactions, setReactions] = useState<Reaction[]>([]);
   const [chatInput, setChatInput] = useState("");
   
@@ -156,10 +156,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
     newSocket.on("receive-message", (msg: Message) => {
       setMessages((prev) => [...prev, msg]);
-      setLatestMobileMessage(msg);
+      const floatId = Date.now() + Math.random();
+      setFloatingMessages((prev) => [...prev, { ...msg, floatId, left: Math.random() * 60 + 10 }]);
       setTimeout(() => {
-        setLatestMobileMessage((current) => current?.id === msg.id ? null : current);
-      }, 4000);
+        setFloatingMessages((prev) => prev.filter((m) => m.floatId !== floatId));
+      }, 3000);
     });
 
     newSocket.on("receive-reaction", ({ emoji, user, id }) => {
@@ -473,13 +474,17 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           )}
 
           {/* Floating Mobile Chat Toast */}
-          <div className="md:hidden absolute bottom-16 left-4 right-4 z-20 pointer-events-none flex flex-col items-center">
-            {latestMobileMessage && (
-              <div key={latestMobileMessage.id} className="animate-float-message bg-black/60 backdrop-blur-md text-white px-4 py-2 rounded-xl inline-block max-w-full shadow-lg border border-white/10">
-                <span className="font-bold text-red-400 mr-2">{latestMobileMessage.user}:</span>
-                <span className="text-sm truncate block sm:inline">{latestMobileMessage.message}</span>
+          <div className="md:hidden absolute inset-0 pointer-events-none z-20 overflow-hidden">
+            {floatingMessages.map((msg) => (
+              <div
+                key={msg.floatId}
+                className="absolute bottom-0 animate-float bg-black/60 backdrop-blur-md text-white px-3 py-1.5 rounded-xl inline-block max-w-[80%] shadow-lg border border-white/10"
+                style={{ left: `${msg.left}%` }}
+              >
+                <span className="font-bold text-red-400 mr-2">{msg.user.substring(0, 10)}:</span>
+                <span className="text-sm break-words">{msg.message}</span>
               </div>
-            )}
+            ))}
           </div>
         </main>
         

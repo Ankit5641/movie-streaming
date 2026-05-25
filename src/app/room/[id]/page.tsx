@@ -24,8 +24,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const { id: roomId } = use(params);
   const { data: session, status } = useSession();
   const router = useRouter();
-  
   const videoRef = useRef<HTMLVideoElement>(null);
+  const ambilightRef = useRef<HTMLVideoElement>(null);
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [floatingMessages, setFloatingMessages] = useState<(Message & { floatId: number, left: number })[]>([]);
@@ -56,6 +56,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [playlist, setPlaylist] = useState<{url: string, name: string}[]>([]);
   const [participants, setParticipants] = useState<{id: string, name: string}[]>([]);
   const [activeSidebarTab, setActiveSidebarTab] = useState<"chat" | "queue" | "participants">("chat");
+  const [showSidebar, setShowSidebar] = useState(true);
   const [isHost, setIsHost] = useState(false);
   const isHostRef = useRef(false);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
@@ -355,6 +356,65 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   // Find if anyone is sharing a screen
   const screenShareStream = Object.values(remoteStreams).find(stream => stream.getVideoTracks().length > 0);
 
+  // Pro Keyboard Shortcuts (Laptop Only)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input or textarea
+      if (
+        document.activeElement?.tagName === "INPUT" ||
+        document.activeElement?.tagName === "TEXTAREA" ||
+        (document.activeElement as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      // Ensure we only affect desktop
+      if (window.innerWidth < 768) return;
+
+      switch (e.key.toLowerCase()) {
+        case " ":
+          e.preventDefault();
+          if (videoRef.current) {
+            videoRef.current.paused ? videoRef.current.play() : videoRef.current.pause();
+          }
+          break;
+        case "f":
+          e.preventDefault();
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen().catch(() => {});
+          } else {
+            document.exitFullscreen().catch(() => {});
+          }
+          break;
+        case "m":
+          e.preventDefault();
+          toggleMute();
+          break;
+        case "c":
+          e.preventDefault();
+          setShowSidebar(prev => !prev);
+          break;
+        case "arrowleft":
+          e.preventDefault();
+          if (videoRef.current) {
+            videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10);
+            if (ambilightRef.current) ambilightRef.current.currentTime = videoRef.current.currentTime;
+          }
+          break;
+        case "arrowright":
+          e.preventDefault();
+          if (videoRef.current) {
+            videoRef.current.currentTime = Math.min(videoRef.current.duration, videoRef.current.currentTime + 10);
+            if (ambilightRef.current) ambilightRef.current.currentTime = videoRef.current.currentTime;
+          }
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [toggleMute]);
+
   return (
     <>
       <style dangerouslySetInnerHTML={{__html: `
@@ -443,14 +503,40 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             </div>
           ) : videoUrl ? (
             <div className="relative group flex items-center justify-center w-full h-full">
+              {/* Cinematic Ambilight Glow (Laptop Only) */}
+              <video
+                ref={ambilightRef}
+                src={videoUrl}
+                className="hidden md:block absolute inset-0 w-full h-full object-cover blur-[80px] opacity-60 scale-110 transform -z-10 pointer-events-none"
+                muted
+                playsInline
+              />
               <video
                 ref={videoRef}
                 src={videoUrl}
-                className="max-w-full max-h-full rounded-xl shadow-2xl bg-black"
+                className="max-w-full max-h-full rounded-xl shadow-2xl bg-black z-10 relative"
                 controls
-                onPlay={handlePlay}
-                onPause={handlePause}
-                onSeeked={handleSeek}
+                onPlay={(e) => {
+                  handlePlay();
+                  ambilightRef.current?.play().catch(() => {});
+                }}
+                onPause={(e) => {
+                  handlePause();
+                  ambilightRef.current?.pause();
+                }}
+                onSeeked={(e) => {
+                  handleSeek(e);
+                  if (ambilightRef.current && videoRef.current) {
+                    ambilightRef.current.currentTime = videoRef.current.currentTime;
+                  }
+                }}
+                onTimeUpdate={() => {
+                  if (ambilightRef.current && videoRef.current) {
+                    if (Math.abs(ambilightRef.current.currentTime - videoRef.current.currentTime) > 0.5) {
+                      ambilightRef.current.currentTime = videoRef.current.currentTime;
+                    }
+                  }
+                }}
                 onWaiting={handleWaiting}
                 onPlaying={handlePlaying}
                 onCanPlayThrough={handlePlaying}
@@ -531,7 +617,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       </div>
 
       {/* Sidebar Section */}
-      <div className="w-full md:w-72 h-[35dvh] md:h-full bg-gray-900 border-t border-gray-800 md:border-t-0 md:border-l flex flex-col shrink-0 relative">
+      <div className={`w-full md:w-72 h-[35dvh] md:h-full bg-gray-900 border-t border-gray-800 md:border-t-0 md:border-l flex-col shrink-0 relative flex ${!showSidebar ? "md:hidden" : ""}`}>
         {/* Desktop Tabs (Hidden on mobile) */}
         <div className="hidden md:flex h-14 md:h-16 border-b border-gray-800 items-center justify-between px-2 shrink-0 bg-gray-900/95 backdrop-blur z-10">
           <div className="flex bg-gray-800 rounded-lg p-1 w-full relative">

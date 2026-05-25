@@ -55,7 +55,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const [isLocked, setIsLocked] = useState(false);
   const [playlist, setPlaylist] = useState<{url: string, name: string}[]>([]);
   const [participants, setParticipants] = useState<{id: string, name: string}[]>([]);
-  const [activeSidebarTab, setActiveSidebarTab] = useState<"chat" | "queue">("chat");
+  const [activeSidebarTab, setActiveSidebarTab] = useState<"chat" | "queue" | "participants">("chat");
   const [isHost, setIsHost] = useState(false);
   const isHostRef = useRef(false);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
@@ -502,16 +502,21 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </div>
 
           {/* Mobile Tabs */}
-          <div className="flex md:hidden bg-gray-800 rounded-lg p-1 max-w-[200px] w-full ml-auto">
+          <div className="flex md:hidden bg-gray-800 rounded-lg p-1 max-w-[220px] w-full ml-auto">
             <button 
               onClick={() => setActiveSidebarTab("chat")} 
-              className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-colors ${activeSidebarTab === "chat" ? "bg-gray-600 text-white" : "text-gray-400 hover:text-gray-200"}`}>
+              className={`flex-1 py-1 text-[10px] font-bold rounded transition-colors ${activeSidebarTab === "chat" ? "bg-gray-600 text-white" : "text-gray-400 hover:text-gray-200"}`}>
               Chat
             </button>
             <button 
               onClick={() => setActiveSidebarTab("queue")} 
-              className={`flex-1 py-1.5 text-[10px] font-bold rounded transition-colors flex items-center justify-center gap-1 ${activeSidebarTab === "queue" ? "bg-red-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
-              Queue {playlist.length > 0 && <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded-full text-[8px]">{playlist.length}</span>}
+              className={`flex-1 py-1 text-[10px] font-bold rounded transition-colors flex items-center justify-center gap-1 ${activeSidebarTab === "queue" ? "bg-red-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
+              Queue {playlist.length > 0 && <span className="bg-red-500/20 text-red-300 px-1 py-0.5 rounded-full text-[8px]">{playlist.length}</span>}
+            </button>
+            <button 
+              onClick={() => setActiveSidebarTab("participants")} 
+              className={`flex-1 py-1 text-[10px] font-bold rounded transition-colors flex items-center justify-center gap-1 ${activeSidebarTab === "participants" ? "bg-green-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
+              People {participants.length > 0 && <span className="bg-green-500/20 text-green-300 px-1 py-0.5 rounded-full text-[8px]">{participants.length}</span>}
             </button>
           </div>
         </div>
@@ -532,6 +537,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               className={`flex-1 py-1.5 text-xs font-bold rounded transition-colors flex items-center justify-center gap-2 ${activeSidebarTab === "queue" ? "bg-red-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
               Queue {playlist.length > 0 && <span className="bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded-full text-[10px]">{playlist.length}</span>}
             </button>
+            <button 
+              onClick={() => setActiveSidebarTab("participants")} 
+              className={`flex-1 py-1.5 text-xs font-bold rounded transition-colors flex items-center justify-center gap-2 ${activeSidebarTab === "participants" ? "bg-green-600 text-white shadow" : "text-gray-400 hover:text-gray-200"}`}>
+              Voice {participants.length > 0 && <span className="bg-green-500/20 text-green-300 px-1.5 py-0.5 rounded-full text-[10px]">{participants.length}</span>}
+            </button>
             {/* Active Speakers Indicator absolute positioned */}
             {speakingUsers.length > 0 && (
               <div className="absolute right-0 -top-2 w-4 h-4 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] flex items-center justify-center text-[8px] font-bold z-10 animate-pulse text-white">
@@ -541,8 +551,8 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           </div>
         </div>
         
-        {activeSidebarTab === "chat" ? (
-          <>
+        {activeSidebarTab === "chat" && (
+          <div className="flex-1 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
               {messages.map((msg, i) => {
                 const isMe = msg.user === (session.user?.name || session.user?.email);
@@ -587,8 +597,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
               </form>
               {micError && <div className="text-xs text-red-500 text-center mt-2">{micError}</div>}
             </div>
-          </>
-        ) : (
+          </div>
+        )}
+
+        {activeSidebarTab === "queue" && (
           <div className="flex-1 overflow-y-auto bg-gray-950 p-2">
             {playlist.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-gray-500 p-4 text-center">
@@ -639,56 +651,65 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
             )}
           </div>
         )}
-        
-        {/* Spatial Audio / Voice Participants */}
-        {participants.length > 0 && (
-          <div className="p-3 bg-gray-950 border-t border-gray-800 max-h-40 overflow-y-auto shrink-0 shadow-inner">
-            <h3 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-3 flex items-center gap-2">
+
+        {activeSidebarTab === "participants" && (
+          <div className="flex-1 overflow-y-auto bg-gray-950 p-2">
+            <h3 className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-3 flex items-center gap-2 pl-1 pt-1">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
               Voice Participants
             </h3>
-            <div className="flex flex-col gap-3">
-              {participants.map((p) => {
-                const isMe = socket ? p.id === socket.id : false;
-                const stream = remoteStreams[p.id];
-
-                return (
-                  <div key={p.id} className="flex items-center gap-2 bg-gray-900 p-2 rounded-lg border border-gray-800">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${speakingUsers.includes(p.id) ? "bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]" : "bg-gray-800 text-gray-400"}`}>
-                      {p.name.substring(0,2).toUpperCase()}
-                    </div>
-                    <div className="flex-1 overflow-hidden">
-                      <div className="text-xs text-gray-300 font-semibold mb-1 truncate">
-                        {p.name} {isMe && <span className="text-gray-500">(You)</span>}
+            {participants.length === 0 ? (
+              <div className="text-center text-gray-500 text-sm mt-10">No one is in the room.</div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {participants.map((p) => {
+                  const isMe = socket ? p.id === socket.id : false;
+                  return (
+                    <div key={p.id} className="flex items-center gap-2 bg-gray-900 p-2 rounded-lg border border-gray-800">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${speakingUsers.includes(p.id) ? "bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.5)]" : "bg-gray-800 text-gray-400"}`}>
+                        {p.name.substring(0,2).toUpperCase()}
                       </div>
-                      {!isMe && (
-                        <input 
-                          type="range" min="0" max="1" step="0.05" defaultValue="1" 
-                          onChange={(e) => {
-                            const audioEl = document.getElementById(`audio-${p.id}`) as HTMLAudioElement;
-                            if (audioEl) audioEl.volume = parseFloat(e.target.value);
-                          }}
-                          className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500" 
-                        />
+                      <div className="flex-1 overflow-hidden">
+                        <div className="text-xs text-gray-300 font-semibold mb-1 truncate">
+                          {p.name} {isMe && <span className="text-gray-500">(You)</span>}
+                        </div>
+                        {!isMe && (
+                          <input 
+                            type="range" min="0" max="1" step="0.05" defaultValue="1" 
+                            onChange={(e) => {
+                              const audioEl = document.getElementById(`audio-${p.id}`) as HTMLAudioElement;
+                              if (audioEl) audioEl.volume = parseFloat(e.target.value);
+                            }}
+                            className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-red-500" 
+                          />
+                        )}
+                      </div>
+                      {isHost && !isMe && (
+                        <button 
+                          onClick={() => socket?.emit("kick-user", { roomId, targetId: p.id })}
+                          title="Kick User"
+                          className="ml-2 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white px-2 py-1 rounded text-[10px] font-bold transition-colors uppercase tracking-wide border border-red-500/30"
+                        >
+                          Kick
+                        </button>
                       )}
                     </div>
-                    {isHost && !isMe && (
-                      <button 
-                        onClick={() => socket?.emit("kick-user", { roomId, targetId: p.id })}
-                        title="Kick User"
-                        className="ml-2 bg-red-600/20 hover:bg-red-600 text-red-500 hover:text-white px-2 py-1 rounded text-[10px] font-bold transition-colors uppercase tracking-wide border border-red-500/30"
-                      >
-                        Kick
-                      </button>
-                    )}
-                    {!isMe && stream && <audio id={`audio-${p.id}`} autoPlay playsInline className="hidden" ref={(el) => { if (el && el.srcObject !== stream) el.srcObject = stream; }} />}
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
+        
       </div>
+
+      {/* Hidden Audio Elements (Must always be rendered to maintain WebRTC connections) */}
+      {participants.map((p) => {
+        const isMe = socket ? p.id === socket.id : false;
+        const stream = remoteStreams[p.id];
+        if (isMe || !stream) return null;
+        return <audio key={`audio-hidden-${p.id}`} id={`audio-${p.id}`} autoPlay playsInline className="hidden" ref={(el) => { if (el && el.srcObject !== stream) el.srcObject = stream; }} />;
+      })}
 
       {/* Set Password Modal */}
       {showPasswordModal && (
